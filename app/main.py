@@ -11,9 +11,10 @@ from typing import Optional
 from app.config import settings
 from app.orchestrator import SimpleOrchestrator
 from app.database.firebase_client import firebase_client
-from app.api import auth_routes, email_routes, oauth_routes, insights_routes
+from app.api import auth_routes, email_routes, oauth_routes, insights_routes, goal_routes
 from app.agents.email_agent import EmailAgent
 from app.agents.proactive_synthesis_agent import ProactiveSynthesisAgent
+from app.agents.goal_agent import GoalAgent
 from app.services.scheduler import SchedulerService
 
 # Configure logging
@@ -72,6 +73,10 @@ async def lifespan(app: FastAPI):
     synthesis_agent = ProactiveSynthesisAgent()
     orchestrator.register_agent(synthesis_agent.name, synthesis_agent)
     logger.info(f"Registered agent: {synthesis_agent.name}")
+    
+    goal_agent = GoalAgent()
+    orchestrator.register_agent(goal_agent.name, goal_agent)
+    logger.info(f"Registered agent: {goal_agent.name}")
     
     # Initialize and start scheduler
     global scheduler
@@ -190,6 +195,7 @@ app.include_router(auth_routes.router)
 app.include_router(email_routes.router)
 app.include_router(oauth_routes.router)
 app.include_router(insights_routes.router)
+app.include_router(goal_routes.router)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="app/ui/static"), name="static")
@@ -263,6 +269,17 @@ async def serve_advisor():
             return HTMLResponse(content=f.read())
     else:
         return HTMLResponse(content="<h1>Advisor dashboard not found</h1>")
+
+# Serve goals dashboard
+@app.get("/goals", response_class=HTMLResponse)
+async def serve_goals():
+    """Serve the goals dashboard page"""
+    goals_path = Path("app/ui/templates/goals_dashboard.html")
+    if goals_path.exists():
+        with open(goals_path, "r") as f:
+            return HTMLResponse(content=f.read())
+    else:
+        return HTMLResponse(content="<h1>Goals dashboard not found</h1>")
 
 # TODO: Add more API routes for agents
 # TODO: Add WebSocket endpoint for real-time updates

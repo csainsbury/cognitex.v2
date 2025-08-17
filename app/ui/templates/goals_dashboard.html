@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Goals Dashboard - Cognitex</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .goals-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .goals-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+        .goal-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            transition: box-shadow 0.3s ease;
+        }
+        .goal-card:hover {
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+        }
+        .goal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 15px;
+        }
+        .goal-content {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .goal-metadata {
+            display: flex;
+            gap: 20px;
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 15px;
+        }
+        .goal-type {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .goal-type.short_term {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        .goal-type.medium_term {
+            background: #fce4ec;
+            color: #c2185b;
+        }
+        .goal-type.long_term {
+            background: #f3e5f5;
+            color: #7b1fa2;
+        }
+        .goal-status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .goal-status.active {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+        .goal-status.completed {
+            background: #f5f5f5;
+            color: #616161;
+        }
+        .goal-status.paused {
+            background: #fff3e0;
+            color: #e65100;
+        }
+        .goal-priority {
+            display: flex;
+            gap: 3px;
+        }
+        .priority-star {
+            color: #ffc107;
+        }
+        .priority-star.empty {
+            color: #e0e0e0;
+        }
+        .goal-progress {
+            margin-top: 15px;
+        }
+        .progress-bar {
+            background: #f5f5f5;
+            border-radius: 4px;
+            height: 8px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            background: linear-gradient(90deg, #4caf50, #66bb6a);
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+        .progress-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+        .goal-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .goal-button {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        .goal-button.edit {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        .goal-button.edit:hover {
+            background: #bbdefb;
+        }
+        .goal-button.delete {
+            background: #ffebee;
+            color: #c62828;
+        }
+        .goal-button.delete:hover {
+            background: #ffcdd2;
+        }
+        .add-goal-form {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            display: none;
+        }
+        .add-goal-form.active {
+            display: block;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #333;
+        }
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .form-group textarea {
+            resize: vertical;
+            min-height: 60px;
+        }
+        .form-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        .btn-primary {
+            background: #1976d2;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #1565c0;
+        }
+        .btn-secondary {
+            background: #f5f5f5;
+            color: #333;
+        }
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+        .empty-state h3 {
+            margin-bottom: 10px;
+        }
+        .filter-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #f5f5f5;
+        }
+        .filter-tab {
+            padding: 10px 20px;
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            cursor: pointer;
+            font-weight: 500;
+            color: #666;
+            transition: all 0.3s ease;
+        }
+        .filter-tab.active {
+            color: #1976d2;
+            border-bottom-color: #1976d2;
+        }
+        .filter-tab:hover {
+            color: #333;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #333;
+        }
+        .stat-label {
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="nav-bar">
+        <div class="nav-content">
+            <h1>Cognitex</h1>
+            <div class="nav-links">
+                <a href="/dashboard">Dashboard</a>
+                <a href="/insights">Insights</a>
+                <a href="/advisor">Advisor</a>
+                <a href="/goals" class="active">Goals</a>
+                <a href="/" onclick="logout()">Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="goals-container">
+        <div class="goals-header">
+            <h2>My Goals</h2>
+            <button class="btn btn-primary" onclick="toggleAddGoalForm()">+ Add Goal</button>
+        </div>
+
+        <!-- Statistics -->
+        <div class="stats-grid" id="statsGrid">
+            <div class="stat-card">
+                <div class="stat-value" id="totalGoals">0</div>
+                <div class="stat-label">Total Goals</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="activeGoals">0</div>
+                <div class="stat-label">Active Goals</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="completedGoals">0</div>
+                <div class="stat-label">Completed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="avgProgress">0%</div>
+                <div class="stat-label">Average Progress</div>
+            </div>
+        </div>
+
+        <!-- Add Goal Form -->
+        <div class="add-goal-form" id="addGoalForm">
+            <h3>Add New Goal</h3>
+            <form onsubmit="createGoal(event)">
+                <div class="form-group">
+                    <label for="goalContent">Goal Description *</label>
+                    <input type="text" id="goalContent" required maxlength="500" 
+                           placeholder="What do you want to achieve?">
+                </div>
+                <div class="form-group">
+                    <label for="goalType">Time Horizon</label>
+                    <select id="goalType">
+                        <option value="short_term">Short Term (< 3 months)</option>
+                        <option value="medium_term">Medium Term (3-12 months)</option>
+                        <option value="long_term">Long Term (> 12 months)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="goalCategory">Category</label>
+                    <select id="goalCategory">
+                        <option value="personal">Personal</option>
+                        <option value="work">Work</option>
+                        <option value="health">Health</option>
+                        <option value="learning">Learning</option>
+                        <option value="financial">Financial</option>
+                        <option value="relationship">Relationship</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="goalPriority">Priority (1-5)</label>
+                    <input type="number" id="goalPriority" min="1" max="5" value="3">
+                </div>
+                <div class="form-group">
+                    <label for="goalTargetDate">Target Date</label>
+                    <input type="date" id="goalTargetDate">
+                </div>
+                <div class="form-group">
+                    <label for="goalNotes">Notes</label>
+                    <textarea id="goalNotes" maxlength="1000" 
+                              placeholder="Additional details or milestones..."></textarea>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" onclick="toggleAddGoalForm()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Goal</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Filter Tabs -->
+        <div class="filter-tabs">
+            <button class="filter-tab active" onclick="filterGoals('all')">All Goals</button>
+            <button class="filter-tab" onclick="filterGoals('active')">Active</button>
+            <button class="filter-tab" onclick="filterGoals('completed')">Completed</button>
+            <button class="filter-tab" onclick="filterGoals('short_term')">Short Term</button>
+            <button class="filter-tab" onclick="filterGoals('medium_term')">Medium Term</button>
+            <button class="filter-tab" onclick="filterGoals('long_term')">Long Term</button>
+        </div>
+
+        <!-- Goals List -->
+        <div id="goalsList">
+            <div class="empty-state">
+                <h3>No goals yet</h3>
+                <p>Start by adding your first goal to track your progress</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let goals = [];
+        let currentFilter = 'all';
+
+        // Load goals on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            const token = localStorage.getItem('authToken');
+            if (!token) {
+                window.location.href = '/';
+                return;
+            }
+            loadGoals();
+        });
+
+        function toggleAddGoalForm() {
+            const form = document.getElementById('addGoalForm');
+            form.classList.toggle('active');
+        }
+
+        async function loadGoals() {
+            const token = localStorage.getItem('authToken');
+            try {
+                const response = await fetch('/api/v1/goals', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    goals = data.goals;
+                    updateStats(data);
+                    displayGoals();
+                } else if (response.status === 401) {
+                    window.location.href = '/';
+                }
+            } catch (error) {
+                console.error('Failed to load goals:', error);
+            }
+        }
+
+        function updateStats(data) {
+            document.getElementById('totalGoals').textContent = data.count || 0;
+            document.getElementById('activeGoals').textContent = data.active_count || 0;
+            
+            const completedCount = goals.filter(g => g.status === 'completed').length;
+            document.getElementById('completedGoals').textContent = completedCount;
+            
+            const avgProgress = goals.length > 0 
+                ? Math.round(goals.reduce((sum, g) => sum + (g.progress || 0), 0) / goals.length)
+                : 0;
+            document.getElementById('avgProgress').textContent = `${avgProgress}%`;
+        }
+
+        function displayGoals() {
+            const container = document.getElementById('goalsList');
+            
+            let filteredGoals = goals;
+            if (currentFilter !== 'all') {
+                if (['active', 'completed', 'paused', 'archived'].includes(currentFilter)) {
+                    filteredGoals = goals.filter(g => g.status === currentFilter);
+                } else if (['short_term', 'medium_term', 'long_term'].includes(currentFilter)) {
+                    filteredGoals = goals.filter(g => g.type === currentFilter);
+                }
+            }
+
+            if (filteredGoals.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <h3>No ${currentFilter === 'all' ? '' : currentFilter.replace('_', ' ')} goals</h3>
+                        <p>Try a different filter or add a new goal</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = filteredGoals.map(goal => `
+                <div class="goal-card">
+                    <div class="goal-header">
+                        <div>
+                            <div class="goal-content">${escapeHtml(goal.content)}</div>
+                            <div class="goal-metadata">
+                                <span class="goal-type ${goal.type}">${formatType(goal.type)}</span>
+                                <span class="goal-status ${goal.status}">${goal.status}</span>
+                                <span>${goal.category || 'Personal'}</span>
+                                ${goal.target_date ? `<span>Target: ${formatDate(goal.target_date)}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="goal-priority">
+                            ${renderPriority(goal.priority || 3)}
+                        </div>
+                    </div>
+                    ${goal.notes ? `<p style="color: #666; margin: 10px 0;">${escapeHtml(goal.notes)}</p>` : ''}
+                    <div class="goal-progress">
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: ${goal.progress || 0}%"></div>
+                        </div>
+                        <div class="progress-label">${goal.progress || 0}% complete</div>
+                    </div>
+                    <div class="goal-actions">
+                        <button class="goal-button edit" onclick="editGoal('${goal.id}')">Edit</button>
+                        <button class="goal-button edit" onclick="updateProgress('${goal.id}', ${goal.progress || 0})">Update Progress</button>
+                        ${goal.status === 'active' ? 
+                            `<button class="goal-button edit" onclick="markComplete('${goal.id}')">Mark Complete</button>` : ''}
+                        <button class="goal-button delete" onclick="deleteGoal('${goal.id}')">Archive</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function filterGoals(filter) {
+            currentFilter = filter;
+            
+            // Update active tab
+            document.querySelectorAll('.filter-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+            
+            displayGoals();
+        }
+
+        function renderPriority(priority) {
+            let stars = '';
+            for (let i = 1; i <= 5; i++) {
+                stars += `<span class="priority-star ${i <= priority ? '' : 'empty'}">★</span>`;
+            }
+            return stars;
+        }
+
+        function formatType(type) {
+            return type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+        }
+
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function createGoal(event) {
+            event.preventDefault();
+            const token = localStorage.getItem('authToken');
+            
+            const goalData = {
+                content: document.getElementById('goalContent').value,
+                type: document.getElementById('goalType').value,
+                category: document.getElementById('goalCategory').value,
+                priority: parseInt(document.getElementById('goalPriority').value),
+                target_date: document.getElementById('goalTargetDate').value || null,
+                notes: document.getElementById('goalNotes').value
+            };
+
+            try {
+                const response = await fetch('/api/v1/goals/', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(goalData)
+                });
+
+                if (response.ok) {
+                    toggleAddGoalForm();
+                    document.getElementById('addGoalForm').querySelector('form').reset();
+                    loadGoals();
+                } else {
+                    alert('Failed to create goal');
+                }
+            } catch (error) {
+                console.error('Failed to create goal:', error);
+                alert('Failed to create goal');
+            }
+        }
+
+        async function updateProgress(goalId, currentProgress) {
+            const newProgress = prompt(`Update progress (0-100):`, currentProgress);
+            if (newProgress === null) return;
+            
+            const progress = parseInt(newProgress);
+            if (isNaN(progress) || progress < 0 || progress > 100) {
+                alert('Please enter a valid number between 0 and 100');
+                return;
+            }
+
+            const token = localStorage.getItem('authToken');
+            try {
+                const response = await fetch(`/api/v1/goals/${goalId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ progress })
+                });
+
+                if (response.ok) {
+                    loadGoals();
+                }
+            } catch (error) {
+                console.error('Failed to update progress:', error);
+            }
+        }
+
+        async function markComplete(goalId) {
+            if (!confirm('Mark this goal as completed?')) return;
+
+            const token = localStorage.getItem('authToken');
+            try {
+                const response = await fetch(`/api/v1/goals/${goalId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        status: 'completed',
+                        progress: 100 
+                    })
+                });
+
+                if (response.ok) {
+                    loadGoals();
+                }
+            } catch (error) {
+                console.error('Failed to mark complete:', error);
+            }
+        }
+
+        async function deleteGoal(goalId) {
+            if (!confirm('Archive this goal? It will be removed from your active goals.')) return;
+
+            const token = localStorage.getItem('authToken');
+            try {
+                const response = await fetch(`/api/v1/goals/${goalId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (response.ok) {
+                    loadGoals();
+                }
+            } catch (error) {
+                console.error('Failed to archive goal:', error);
+            }
+        }
+
+        function editGoal(goalId) {
+            // TODO: Implement edit functionality
+            alert('Edit functionality coming soon!');
+        }
+
+        function logout() {
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('userEmail');
+        }
+    </script>
+</body>
+</html>

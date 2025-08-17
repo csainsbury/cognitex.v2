@@ -71,10 +71,13 @@ class ProactiveSynthesisAgent(BaseAgent):
             # Step 1: Gather new information from agents
             gathered_data = await self._gather_information(user_id, context)
             
-            # Step 2: Synthesize information
+            # Step 2: Update social graph based on email interactions
+            await self._update_social_graph(gathered_data, user_id)
+            
+            # Step 3: Synthesize information (now includes relationship context)
             insights = await self._synthesize_information(gathered_data, user_id)
             
-            # Step 3: Store insights
+            # Step 4: Store insights
             stored_insights = await self._store_insights(insights, user_id)
             
             # Update last sync time
@@ -138,6 +141,244 @@ class ProactiveSynthesisAgent(BaseAgent):
         # TODO: Add calendar and task gathering via messaging when those agents are implemented
         
         return working_memory
+    
+    async def _update_social_graph(
+        self,
+        working_memory: Dict[str, Any],
+        user_id: str
+    ) -> None:
+        """
+        Update the user's social graph based on email interactions.
+        Tracks relationships and interaction patterns.
+        
+        Args:
+            working_memory: Contains processed emails with sender information
+            user_id: User identifier
+        """
+        try:
+            emails = working_memory.get("emails", [])
+            if not emails:
+                return
+            
+            logger.info(f"Updating social graph with {len(emails)} email interactions")
+            
+            # Group emails by sender
+            interactions_by_sender = {}
+            for email in emails:
+                sender_email = self._extract_email_address(email.get("sender", ""))
+                if not sender_email or "@" not in sender_email:
+                    continue
+                
+                if sender_email not in interactions_by_sender:
+                    interactions_by_sender[sender_email] = []
+                
+                interactions_by_sender[sender_email].append({
+                    "date": email.get("date", datetime.utcnow().isoformat()),
+                    "subject": email.get("subject", ""),
+                    "intent": email.get("intent", "Unknown"),
+                    "is_reply_needed": email.get("is_reply_needed", False),
+                    "sentiment": email.get("sentiment", "neutral")
+                })
+            
+            # Update contacts in Firestore
+            for sender_email, interactions in interactions_by_sender.items():
+                await self._update_contact(user_id, sender_email, interactions)
+            
+            logger.info(f"Updated {len(interactions_by_sender)} contacts in social graph")
+            
+        except Exception as e:
+            logger.error(f"Failed to update social graph: {e}")
+            # Don't fail the synthesis if social graph update fails
+    
+    def _extract_email_address(self, sender: str) -> str:
+        """Extract email address from sender string like 'Name <email@domain.com>'"""
+        import re
+        match = re.search(r'<(.+?)>', sender)
+        if match:
+            return match.group(1).lower()
+        # If no angle brackets, assume the whole string is the email
+        return sender.strip().lower() if "@" in sender else ""
+    
+    async def _update_contact(
+        self,
+        user_id: str,
+        contact_email: str,
+        interactions: List[Dict[str, Any]]
+    ) -> None:
+        """
+        Update or create a contact record with latest interaction data.
+        
+        Args:
+            user_id: User identifier
+            contact_email: Contact's email address
+            interactions: List of recent interactions with this contact
+        """
+        try:
+            # Reference to contact document
+            contact_ref = firebase_client.db.collection("users").document(user_id)\
+                .collection("contacts").document(contact_email.replace(".", "_"))
+            
+            # Get existing contact or create new
+            doc = contact_ref.get()
+            
+            if doc.exists:
+                contact_data = doc.to_dict()
+                # Append new interactions to history (keep last 50)
+                interaction_history = contact_data.get("interaction_history", [])
+                interaction_history.extend(interactions)
+                interaction_history = interaction_history[-50:]  # Keep last 50 interactions
+            else:
+                # New contact
+                contact_data = {
+                    "email": contact_email,
+                    "name": self._extract_name_from_email(contact_email),
+                    "first_interaction": interactions[0]["date"] if interactions else None,
+                    "interaction_history": interactions
+                }
+                interaction_history = interactions
+            
+            # Calculate relationship metrics
+            latest_interaction = max(interactions, key=lambda x: x.get("date", "")) if interactions else None
+            total_interactions = len(interaction_history)
+            replies_needed = sum(1 for i in interaction_history if i.get("is_reply_needed", False))
+            
+            # Generate AI summary of relationship
+            relationship_summary = await self._generate_relationship_summary(
+                contact_email, interaction_history[-10:]  # Use last 10 interactions for summary
+            )
+            
+            # Update contact data
+            contact_data.update({
+                "last_interaction_date": latest_interaction["date"] if latest_interaction else None,
+                "total_interactions": total_interactions,
+                "pending_replies": replies_needed,
+                "relationship_summary": relationship_summary,
+                "updated_at": datetime.utcnow().isoformat()
+            })
+            
+            # Save to Firestore
+            contact_ref.set(contact_data, merge=True)
+            
+        except Exception as e:
+            logger.error(f"Failed to update contact {contact_email}: {e}")
+    
+    def _extract_name_from_email(self, email: str) -> str:
+        """Extract probable name from email address"""
+        # Remove domain
+        local_part = email.split("@")[0]
+        # Replace common separators with spaces
+        name = local_part.replace(".", " ").replace("_", " ").replace("-", " ")
+        # Capitalize words
+        return " ".join(word.capitalize() for word in name.split())
+    
+    async def _generate_relationship_summary(
+        self,
+        contact_email: str,
+        recent_interactions: List[Dict[str, Any]]
+    ) -> str:
+        """
+        Generate an AI summary of the relationship based on interaction history.
+        
+        Args:
+            contact_email: Contact's email
+            recent_interactions: Recent interaction history
+            
+        Returns:
+            Brief relationship summary
+        """
+        if not recent_interactions:
+            return "No recent interactions"
+        
+        try:
+            # Build a summary of interactions for the LLM
+            interaction_summary = f"Contact: {contact_email}\n"
+            interaction_summary += f"Number of recent interactions: {len(recent_interactions)}\n"
+            interaction_summary += "Recent topics:\n"
+            
+            for interaction in recent_interactions[-5:]:  # Last 5 interactions
+                interaction_summary += f"- {interaction.get('subject', 'No subject')}\n"
+            
+            prompt = f"""Based on these email interactions, provide a one-sentence summary of the relationship:
+            {interaction_summary}
+            
+            Focus on: relationship type (colleague, client, friend), interaction frequency, and main topics discussed.
+            Keep it under 50 words."""
+            
+            result = await llm_service.simple_completion(
+                prompt=prompt,
+                complexity=ModelComplexity.SIMPLE,
+                max_tokens=100
+            )
+            
+            return result.strip()
+            
+        except Exception as e:
+            logger.error(f"Failed to generate relationship summary: {e}")
+            return "Relationship summary unavailable"
+    
+    async def _get_relationship_context(self, user_id: str) -> Dict[str, Any]:
+        """
+        Get relationship context for synthesis.
+        Identifies contacts needing attention.
+        
+        Args:
+            user_id: User identifier
+            
+        Returns:
+            Relationship context including stale relationships and pending replies
+        """
+        try:
+            # Query contacts collection
+            contacts_ref = firebase_client.db.collection("users").document(user_id).collection("contacts")
+            
+            # Get all contacts
+            contacts = []
+            for doc in contacts_ref.stream():
+                contact = doc.to_dict()
+                contact["id"] = doc.id
+                contacts.append(contact)
+            
+            # Analyze relationship patterns
+            now = datetime.utcnow()
+            stale_threshold = timedelta(days=21)  # 3 weeks
+            
+            stale_relationships = []
+            pending_replies = []
+            
+            for contact in contacts:
+                last_interaction = contact.get("last_interaction_date")
+                if last_interaction:
+                    last_date = datetime.fromisoformat(last_interaction.replace("Z", "+00:00"))
+                    if now - last_date > stale_threshold:
+                        stale_relationships.append({
+                            "email": contact["email"],
+                            "name": contact.get("name", "Unknown"),
+                            "days_since_contact": (now - last_date).days,
+                            "summary": contact.get("relationship_summary", "")
+                        })
+                
+                if contact.get("pending_replies", 0) > 0:
+                    pending_replies.append({
+                        "email": contact["email"],
+                        "name": contact.get("name", "Unknown"),
+                        "pending_count": contact["pending_replies"]
+                    })
+            
+            return {
+                "total_contacts": len(contacts),
+                "stale_relationships": stale_relationships[:5],  # Top 5 stale
+                "pending_replies": pending_replies[:5],  # Top 5 pending
+                "active_contacts": len([c for c in contacts if c.get("total_interactions", 0) > 5])
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get relationship context: {e}")
+            return {
+                "total_contacts": 0,
+                "stale_relationships": [],
+                "pending_replies": [],
+                "active_contacts": 0
+            }
     
     async def _perform_thematic_analysis(
         self,
@@ -330,6 +571,7 @@ class ProactiveSynthesisAgent(BaseAgent):
     ) -> List[Dict[str, Any]]:
         """
         Stage 3: Generate final advisor insights using pre-analyzed data.
+        Now includes user goals and relationship context for personalized advice.
         
         Args:
             analysis: Pre-analyzed structured data
@@ -343,8 +585,23 @@ class ProactiveSynthesisAgent(BaseAgent):
         replies_needed = social_notes.get('replies_needed', []) if isinstance(social_notes, dict) else []
         nudges = social_notes.get('relationship_nudges', []) if isinstance(social_notes, dict) else []
         
-        # TODO: In Phase 5, fetch user goals from Firestore here
-        user_goals = ["Complete project deliverables", "Maintain work-life balance"]  # Placeholder
+        # Get user goals from GoalAgent
+        user_goals = []
+        try:
+            from app.agents.goal_agent import GoalAgent
+            goal_agent = GoalAgent()
+            formatted_goals = await goal_agent.get_active_goals_for_synthesis(user_id)
+            user_goals = [g["content"] for g in formatted_goals[:3]]  # Top 3 goals for context
+        except Exception as e:
+            logger.warning(f"Could not fetch user goals: {e}")
+            user_goals = []
+        
+        # Get relationship context
+        relationship_context = await self._get_relationship_context(user_id)
+        
+        # Build enhanced prompt with goals and relationship context
+        stale_relationships = relationship_context.get('stale_relationships', [])
+        pending_replies = relationship_context.get('pending_replies', [])
         
         prompt = f"""You are a wise, empathetic, and strategic advisor for a user with neurodivergent traits. 
 Your goal is to reduce overwhelm and provide clear, actionable guidance. You have already performed a detailed analysis of their recent digital activity.
@@ -359,9 +616,11 @@ Here is your pre-computed analysis summary:
 ## Social Radar
 - **People to Reply To:** {', '.join(replies_needed[:3]) if replies_needed else 'None'}
 - **Relationship Nudges:** {', '.join(nudges[:2]) if nudges else 'None'}
+- **Stale Relationships (>3 weeks):** {', '.join([f"{r['name']} ({r['days_since_contact']} days)" for r in stale_relationships[:2]]) if stale_relationships else 'None'}
+- **Pending Replies:** {len(pending_replies)} people waiting for responses
 
 ## Goal Alignment
-- **Active Goals:** {', '.join(user_goals)}
+- **Active Goals:** {', '.join(user_goals) if user_goals else 'No goals set yet'}
 
 Based *only* on the summary above, compose a briefing for your user. Structure your response into three distinct sections in markdown:
 
@@ -394,7 +653,10 @@ Remember: Be warm but concise. Reduce cognitive load. Make the complex feel mana
                 "metadata": {
                     "urgent_count": len(analysis['priorities']['urgent']),
                     "important_count": len(analysis['priorities']['important']),
-                    "social_count": len(analysis['social_notes'])
+                    "social_count": len(replies_needed) + len(nudges),
+                    "active_goals": len(user_goals),
+                    "stale_relationships": len(stale_relationships),
+                    "pending_replies": len(pending_replies)
                 },
                 "created_at": datetime.utcnow().isoformat()
             })
