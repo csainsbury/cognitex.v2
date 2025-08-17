@@ -57,6 +57,11 @@ async def lifespan(app: FastAPI):
     orchestrator = SimpleOrchestrator()
     logger.info("Orchestrator initialized")
     
+    # Start orchestrator message processing loop as background task
+    import asyncio
+    orchestrator_task = asyncio.create_task(orchestrator.run())
+    logger.info("Orchestrator message processing started")
+    
     # Initialize Firebase
     try:
         firebase_client.initialize()

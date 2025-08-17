@@ -371,7 +371,7 @@
 
         // Load goals on page load
         document.addEventListener('DOMContentLoaded', () => {
-            const token = localStorage.getItem('authToken');
+            const token = localStorage.getItem('cognitex_token');
             if (!token) {
                 window.location.href = '/';
                 return;
@@ -385,7 +385,7 @@
         }
 
         async function loadGoals() {
-            const token = localStorage.getItem('authToken');
+            const token = localStorage.getItem('cognitex_token');
             try {
                 const response = await fetch('/api/v1/goals', {
                     headers: {
@@ -512,7 +512,7 @@
 
         async function createGoal(event) {
             event.preventDefault();
-            const token = localStorage.getItem('authToken');
+            const token = localStorage.getItem('cognitex_token');
             
             const goalData = {
                 content: document.getElementById('goalContent').value,
@@ -556,7 +556,7 @@
                 return;
             }
 
-            const token = localStorage.getItem('authToken');
+            const token = localStorage.getItem('cognitex_token');
             try {
                 const response = await fetch(`/api/v1/goals/${goalId}`, {
                     method: 'PUT',
@@ -578,7 +578,7 @@
         async function markComplete(goalId) {
             if (!confirm('Mark this goal as completed?')) return;
 
-            const token = localStorage.getItem('authToken');
+            const token = localStorage.getItem('cognitex_token');
             try {
                 const response = await fetch(`/api/v1/goals/${goalId}`, {
                     method: 'PUT',
@@ -603,7 +603,7 @@
         async function deleteGoal(goalId) {
             if (!confirm('Archive this goal? It will be removed from your active goals.')) return;
 
-            const token = localStorage.getItem('authToken');
+            const token = localStorage.getItem('cognitex_token');
             try {
                 const response = await fetch(`/api/v1/goals/${goalId}`, {
                     method: 'DELETE',
@@ -626,8 +626,9 @@
         }
 
         function logout() {
-            localStorage.removeItem('authToken');
+            localStorage.removeItem('cognitex_token');
             localStorage.removeItem('userEmail');
+            window.location.href = '/';
         }
     </script>
 </body>
