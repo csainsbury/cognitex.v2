@@ -318,7 +318,7 @@ class EmailAgent(BaseAgent):
             })
         
         # Build prompt for batch processing with JSON output
-        prompt = f"""Analyze the following email batch. For each email, extract a structured JSON object.
+        prompt = f"""Analyze the following email batch. Prioritize identifying work-related content, project communications, and personal correspondence over marketing/promotional emails.
 
 Emails:
 {json.dumps(email_batch, indent=2)}
@@ -327,28 +327,41 @@ For each email, provide a JSON object with this EXACT structure:
 {{
     "id": "email_id",
     "summary": "A concise, one-sentence summary of the email's core message.",
-    "intent": "Classify the sender's primary intent (e.g., 'Question', 'Request for Action', 'Informational', 'Social', 'Advertisement', 'Meeting Invitation', 'Introduction', 'Follow-up').",
+    "intent": "Classify the sender's primary intent: 'Work Project' | 'Meeting Invitation' | 'Request for Action' | 'Question' | 'Follow-up' | 'Personal' | 'Information Sharing' | 'Newsletter' | 'Marketing/Promotional'",
     "entities": {{
-        "people": ["Name1", "Name2"],
-        "companies": ["Company1"],
-        "projects": ["Project Alpha", "GEN-IMPACT"]
+        "people": ["Focus on colleagues, clients, collaborators - not marketing personas"],
+        "companies": ["Prioritize work-related organizations"],
+        "projects": ["Include specific projects like GEN-IMPACT, research initiatives, work deliverables"]
     }},
     "commitments": {{
         "tasks_for_me": ["Specific action item I need to do."],
         "tasks_for_others": ["Action item someone else was asked to do."],
         "deadlines": ["YYYY-MM-DD: Description of deadline."]
     }},
-    "sentiment": "positive | negative | neutral",
+    "sentiment": "positive | negative | neutral | urgent",
     "is_reply_needed": true | false,
-    "urgency_score": 3
+    "urgency_score": 3,
+    "is_work_related": true | false,
+    "sender_importance": "high | medium | low"
 }}
 
-IMPORTANT:
-- urgency_score: An integer from 1 (low) to 5 (high) based on actual content urgency, NOT just keywords
-- intent: Be specific about the type of communication
-- entities: Extract ALL mentioned people, companies, and projects
-- commitments: Be very specific about WHO needs to do WHAT by WHEN
-- is_reply_needed: Consider if the sender is expecting a response
+SCORING GUIDELINES:
+- urgency_score 5: Critical work deadlines, urgent requests from managers/clients, time-sensitive projects
+- urgency_score 4: Important work tasks, scheduled meetings, project updates requiring action
+- urgency_score 3: Regular work correspondence, standard follow-ups, collaborative discussions
+- urgency_score 2: Personal emails, FYI information, non-urgent updates
+- urgency_score 1: Marketing emails, newsletters, promotional content, automated notifications
+
+SENDER IMPORTANCE:
+- high: Direct colleagues, managers, clients, key collaborators on active projects
+- medium: Extended team members, occasional contacts, service providers
+- low: Marketing senders, automated systems, unknown contacts
+
+KEY FOCUS:
+- Identify emails mentioning specific projects (GEN-IMPACT, research, deliverables)
+- Flag emails requiring responses or actions
+- Extract concrete deadlines and commitments
+- Distinguish genuine work communication from promotional content
 
 Return ONLY a valid JSON array of these objects. No additional text."""
         
@@ -380,11 +393,14 @@ Return ONLY a valid JSON array of these objects. No additional text."""
                             "has_attachments": email['has_attachments'],
                             "labels": email['labels'],
                             "summary": analysis.get('summary', email['snippet']),
-                            "entities": analysis.get('entities', []),
-                            "tasks": analysis.get('tasks', []),
+                            "intent": analysis.get('intent', 'Unknown'),
+                            "entities": analysis.get('entities', {}),
+                            "commitments": analysis.get('commitments', {}),
                             "sentiment": analysis.get('sentiment', 'neutral'),
-                            "requires_response": analysis.get('requires_response', False),
-                            "priority": analysis.get('priority', 'low'),
+                            "is_reply_needed": analysis.get('is_reply_needed', False),
+                            "urgency_score": analysis.get('urgency_score', 1),
+                            "is_work_related": analysis.get('is_work_related', False),
+                            "sender_importance": analysis.get('sender_importance', 'low'),
                             "original_body": email['body'][:1000]  # Keep truncated for reference
                         })
                     else:

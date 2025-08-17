@@ -412,33 +412,46 @@ class ProactiveSynthesisAgent(BaseAgent):
                 "is_reply_needed": email.get('is_reply_needed', False)
             })
         
-        prompt = f"""Analyze these emails and group them into coherent themes based on projects, topics, and intent.
-        Use the enriched metadata (intent, entities, urgency) to create meaningful groupings.
+        prompt = f"""Analyze these emails and group them into coherent themes. PRIORITIZE work-related themes over marketing.
+        Use the enriched metadata (intent, entities, urgency, is_work_related) to create meaningful groupings.
         
         Emails to analyze:
         {json.dumps(emails_data, indent=2)}
         
-        Consider these factors when grouping:
-        1. Projects mentioned in entities (e.g., GEN-IMPACT, specific initiatives)
-        2. People involved (from entities.people)
-        3. Intent patterns (Meeting Invitations together, Questions together, etc.)
-        4. Urgency levels (group high-urgency items)
+        Theme Creation Guidelines:
+        1. WORK PROJECTS: Group by specific projects in entities.projects (GEN-IMPACT, research, deliverables)
+        2. KEY PEOPLE: Group emails from important senders (high sender_importance)
+        3. ACTION ITEMS: Group emails with commitments.tasks_for_me
+        4. MEETINGS & EVENTS: Group meeting invitations and calendar items
+        5. MARKETING: Group all urgency_score <= 2 promotional content together
+        
+        Prioritize creating themes like:
+        - "Active Work Projects" (urgency >= 3, is_work_related=true)
+        - "Team Communications" (from colleagues)
+        - "Client Requests" (external high-importance senders)
+        - "Pending Actions" (has tasks_for_me)
+        - "Low Priority/Marketing" (urgency <= 2)
         
         Return a JSON object with this structure:
         {{
             "themes": {{
-                "Theme Name 1": {{
-                    "description": "Brief description of this theme",
-                    "email_indices": [0, 2, 5],
-                    "average_urgency": 3.5,
-                    "key_entities": {{"people": ["John"], "projects": ["Alpha"]}}
+                "Active Work Projects": {{
+                    "description": "Emails about ongoing work projects and deliverables",
+                    "email_indices": [indices of work emails],
+                    "average_urgency": 4.0,
+                    "key_entities": {{"people": ["colleagues"], "projects": ["GEN-IMPACT"]}}
+                }},
+                "Marketing & Newsletters": {{
+                    "description": "Promotional and marketing emails",
+                    "email_indices": [indices of marketing emails],
+                    "average_urgency": 1.0,
+                    "key_entities": {{"companies": ["marketing companies"]}}
                 }}
             }},
-            "uncategorized_indices": [6, 7]
+            "uncategorized_indices": []
         }}
         
-        Be thoughtful about themes - look for patterns beyond keywords.
-        Return ONLY the JSON object, no additional text."""
+        Create themes that separate work from noise. Return ONLY the JSON object."""
         
         try:
             result = await llm_service.simple_completion(
@@ -498,33 +511,36 @@ class ProactiveSynthesisAgent(BaseAgent):
                 "emails": theme_emails
             }
         
-        prompt = f"""Analyze these themed groups to identify priorities based on commitments and urgency scores.
+        prompt = f"""Analyze these themed groups to identify priorities. Focus on WORK-RELATED items and genuine commitments.
         The user has ADHD/autism traits and needs clear, actionable guidance.
         
         Themes with enriched data:
         {json.dumps(themes_summary, indent=2)}
         
-        Focus on:
-        1. Extract URGENT tasks from commitments.tasks_for_me with urgency_score >= 4
-        2. Extract IMPORTANT items from themes with average_urgency >= 3
-        3. Identify SOCIAL obligations from is_reply_needed flags and sender information
-        4. Note any DEADLINES from commitments.deadlines
+        Priority Extraction Rules:
+        1. URGENT: Only items with urgency_score >= 4 AND concrete commitments.tasks_for_me
+        2. IMPORTANT: Work-related items (urgency_score >= 3) with specific actions needed
+        3. SOCIAL: Emails with is_reply_needed=true from high/medium importance senders
+        4. DEADLINES: Extract from commitments.deadlines field
+        5. IGNORE: Marketing emails (urgency_score <= 2), newsletters, promotional content
         
         Return your analysis as a JSON object:
         {{
             "priorities": {{
-                "urgent": ["Specific task from commitments with deadline"],
-                "important": ["Important but not urgent item"],
-                "deferred": ["Can be done later"]
+                "urgent": ["Specific work task with deadline - include WHO requested it"],
+                "important": ["Important work item - include project name if mentioned"],
+                "deferred": ["Low priority but still work-related"]
             }},
             "social_notes": {{
-                "replies_needed": ["Reply to X about Y"],
-                "relationship_nudges": ["Haven't heard from Z in a while"]
+                "replies_needed": ["Reply to [Name] about [specific topic]"],
+                "relationship_nudges": ["Check in with [Name] - last contact [X days] ago"]
             }},
-            "deadlines": ["YYYY-MM-DD: Specific deadline"],
-            "focus_recommendation": "One clear next action based on highest urgency"
+            "deadlines": ["YYYY-MM-DD: [Project/Task] - [Description]"],
+            "focus_recommendation": "Most critical SINGLE action to take right now",
+            "work_projects_mentioned": ["List any specific projects like GEN-IMPACT found in emails"]
         }}
         
+        Be SPECIFIC - use actual names, projects, and deadlines from the data.
         Return ONLY the JSON object."""
         
         try:
