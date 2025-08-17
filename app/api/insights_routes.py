@@ -153,6 +153,12 @@ async def trigger_synthesis(
                 "triggered_by": "manual",
                 "force": request.force
             },
+            metadata={
+                "action": "START_SYNTHESIS_CYCLE",
+                "user_id": current_user.user_id,
+                "triggered_by": "manual",
+                "force": request.force
+            },
             priority=MessagePriority.HIGH
         )
         

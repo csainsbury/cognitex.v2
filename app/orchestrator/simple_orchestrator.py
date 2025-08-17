@@ -134,9 +134,11 @@ class SimpleOrchestrator:
                 agent = self.agents.get(message.recipient)
                 if not agent:
                     logger.error(f"Unknown recipient: {message.recipient}")
-                    return message.create_error_reply(
-                        sender="orchestrator",
-                        error=f"Unknown agent: {message.recipient}"
+                    # Don't send error back to non-agent senders like "API"
+                    if message.sender in self.agents:
+                        return message.create_error_reply(
+                            sender="orchestrator",
+                            error=f"Unknown agent: {message.recipient}"
                     )
                 
                 if hasattr(agent, 'handle_message'):
