@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cognitex Auth Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
+        .test { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .success { background: #d4edda; border-color: #c3e6cb; }
+        .error { background: #f8d7da; border-color: #f5c6cb; }
+        .info { background: #d1ecf1; border-color: #bee5eb; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        pre { background: #f4f4f4; padding: 10px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>Cognitex Authentication Test</h1>
+    
+    <div class="test">
+        <h3>1. API Health Check</h3>
+        <button onclick="testHealth()">Test Health Endpoint</button>
+        <div id="health-result"></div>
+    </div>
+    
+    <div class="test">
+        <h3>2. Google Sign-In Test</h3>
+        <p>Current Google Client ID: <code id="client-id"></code></p>
+        <div id="g_id_onload"
+             data-client_id="414523707357-072qinv2bvej383ughs27edecvj240ee.apps.googleusercontent.com"
+             data-callback="handleGoogleSignIn"
+             data-auto_prompt="false">
+        </div>
+        <div class="g_id_signin"
+             data-type="standard"
+             data-size="large"
+             data-theme="outline"
+             data-text="sign_in_with"
+             data-shape="rectangular">
+        </div>
+        <div id="signin-result"></div>
+    </div>
+    
+    <div class="test">
+        <h3>3. Token Storage</h3>
+        <button onclick="checkToken()">Check Stored Token</button>
+        <div id="token-result"></div>
+    </div>
+    
+    <div class="test">
+        <h3>4. Protected Endpoint Test</h3>
+        <button onclick="testProtected()">Test /api/auth/me</button>
+        <div id="protected-result"></div>
+    </div>
+    
+    <div class="test">
+        <h3>5. Manual Token Test</h3>
+        <input type="text" id="manual-token" placeholder="Paste ID token here" style="width: 100%; padding: 5px;">
+        <button onclick="testManualToken()">Test Token</button>
+        <div id="manual-result"></div>
+    </div>
+
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script>
+        const API_BASE = 'https://cognitex.org';
+        
+        // Display Client ID
+        document.getElementById('client-id').textContent = '414523707357-072qinv2bvej383ughs27edecvj240ee.apps.googleusercontent.com';
+        
+        async function testHealth() {
+            const resultDiv = document.getElementById('health-result');
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                resultDiv.innerHTML = `<pre class="success">✅ API is running!\n${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                resultDiv.innerHTML = `<pre class="error">❌ Error: ${error.message}</pre>`;
+            }
+        }
+        
+        async function handleGoogleSignIn(response) {
+            const resultDiv = document.getElementById('signin-result');
+            console.log('Google Sign-In response:', response);
+            
+            try {
+                resultDiv.innerHTML = '<pre class="info">Sending token to backend...</pre>';
+                
+                const res = await fetch(`${API_BASE}/api/auth/google`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        id_token: response.credential
+                    })
+                });
+                
+                if (!res.ok) {
+                    const error = await res.text();
+                    throw new Error(`${res.status}: ${error}`);
+                }
+                
+                const data = await res.json();
+                
+                // Store token
+                localStorage.setItem('cognitex_token', data.token.access_token);
+                localStorage.setItem('cognitex_user', JSON.stringify(data.user));
+                
+                resultDiv.innerHTML = `<pre class="success">✅ Authentication successful!\nUser: ${data.user.email}\nToken stored in localStorage</pre>`;
+                
+            } catch (error) {
+                resultDiv.innerHTML = `<pre class="error">❌ Authentication failed:\n${error.message}</pre>`;
+                console.error('Auth error:', error);
+            }
+        }
+        
+        function checkToken() {
+            const resultDiv = document.getElementById('token-result');
+            const token = localStorage.getItem('cognitex_token');
+            const user = localStorage.getItem('cognitex_user');
+            
+            if (token) {
+                const tokenPreview = token.substring(0, 20) + '...';
+                let userInfo = '';
+                if (user) {
+                    try {
+                        const userData = JSON.parse(user);
+                        userInfo = `\nUser: ${userData.email}`;
+                    } catch (e) {}
+                }
+                resultDiv.innerHTML = `<pre class="success">✅ Token found: ${tokenPreview}${userInfo}</pre>`;
+            } else {
+                resultDiv.innerHTML = `<pre class="info">No token stored. Please sign in first.</pre>`;
+            }
+        }
+        
+        async function testProtected() {
+            const resultDiv = document.getElementById('protected-result');
+            const token = localStorage.getItem('cognitex_token');
+            
+            if (!token) {
+                resultDiv.innerHTML = `<pre class="error">No token found. Please sign in first.</pre>`;
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/me`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    const error = await response.text();
+                    throw new Error(`${response.status}: ${error}`);
+                }
+                
+                const data = await response.json();
+                resultDiv.innerHTML = `<pre class="success">✅ Protected endpoint works!\n${JSON.stringify(data, null, 2)}</pre>`;
+                
+            } catch (error) {
+                resultDiv.innerHTML = `<pre class="error">❌ Error: ${error.message}</pre>`;
+            }
+        }
+        
+        async function testManualToken() {
+            const resultDiv = document.getElementById('manual-result');
+            const token = document.getElementById('manual-token').value;
+            
+            if (!token) {
+                resultDiv.innerHTML = `<pre class="error">Please enter a token</pre>`;
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/google`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        id_token: token
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.innerHTML = `<pre class="success">✅ Token valid!\n${JSON.stringify(data, null, 2)}</pre>`;
+                } else {
+                    resultDiv.innerHTML = `<pre class="error">❌ Token invalid:\n${JSON.stringify(data, null, 2)}</pre>`;
+                }
+                
+            } catch (error) {
+                resultDiv.innerHTML = `<pre class="error">❌ Error: ${error.message}</pre>`;
+            }
+        }
+        
+        // Test health on load
+        window.onload = () => {
+            testHealth();
+        };
+    </script>
+</body>
+</html>

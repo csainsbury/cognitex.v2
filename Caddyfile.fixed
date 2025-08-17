@@ -1,0 +1,4 @@
+cognitex.org {
+    # Reverse proxy to FastAPI application
+    reverse_proxy localhost:8000
+}
