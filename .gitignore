@@ -52,6 +52,10 @@ credentials.json
 token.json
 client_secret*.json
 
+# Tokens and pickled credentials
+tokens/
+*.pkl
+
 # Database
 *.db
 *.sqlite
