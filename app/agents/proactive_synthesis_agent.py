@@ -242,10 +242,35 @@ class ProactiveSynthesisAgent(BaseAgent):
             total_interactions = len(interaction_history)
             replies_needed = sum(1 for i in interaction_history if i.get("is_reply_needed", False))
             
-            # Generate AI summary of relationship
-            relationship_summary = await self._generate_relationship_summary(
-                contact_email, interaction_history[-10:]  # Use last 10 interactions for summary
-            )
+            # Check if a summary update is needed (only update weekly or for new contacts)
+            needs_summary_update = False
+            existing_summary = contact_data.get("relationship_summary", "No summary yet.")
+            
+            if not doc.exists:
+                # New contact - generate summary
+                needs_summary_update = True
+            else:
+                # Check if summary is stale (older than 7 days)
+                last_updated_str = contact_data.get("summary_updated_at")
+                if not last_updated_str:
+                    needs_summary_update = True
+                else:
+                    try:
+                        last_updated = datetime.fromisoformat(last_updated_str)
+                        if (datetime.utcnow() - last_updated) > timedelta(days=7):
+                            needs_summary_update = True
+                    except (ValueError, TypeError):
+                        needs_summary_update = True
+            
+            # Only generate AI summary if needed
+            if needs_summary_update:
+                relationship_summary = await self._generate_relationship_summary(
+                    contact_email, interaction_history[-10:]  # Use last 10 interactions for summary
+                )
+                summary_updated_at = datetime.utcnow().isoformat()
+            else:
+                relationship_summary = existing_summary
+                summary_updated_at = contact_data.get("summary_updated_at", datetime.utcnow().isoformat())
             
             # Update contact data
             contact_data.update({
@@ -253,6 +278,7 @@ class ProactiveSynthesisAgent(BaseAgent):
                 "total_interactions": total_interactions,
                 "pending_replies": replies_needed,
                 "relationship_summary": relationship_summary,
+                "summary_updated_at": summary_updated_at,
                 "updated_at": datetime.utcnow().isoformat()
             })
             
@@ -412,46 +438,35 @@ class ProactiveSynthesisAgent(BaseAgent):
                 "is_reply_needed": email.get('is_reply_needed', False)
             })
         
-        prompt = f"""Analyze these emails and group them into coherent themes. PRIORITIZE work-related themes over marketing.
-        Use the enriched metadata (intent, entities, urgency, is_work_related) to create meaningful groupings.
-        
-        Emails to analyze:
-        {json.dumps(emails_data, indent=2)}
-        
-        Theme Creation Guidelines:
-        1. WORK PROJECTS: Group by specific projects in entities.projects (GEN-IMPACT, research, deliverables)
-        2. KEY PEOPLE: Group emails from important senders (high sender_importance)
-        3. ACTION ITEMS: Group emails with commitments.tasks_for_me
-        4. MEETINGS & EVENTS: Group meeting invitations and calendar items
-        5. MARKETING: Group all urgency_score <= 2 promotional content together
-        
-        Prioritize creating themes like:
-        - "Active Work Projects" (urgency >= 3, is_work_related=true)
-        - "Team Communications" (from colleagues)
-        - "Client Requests" (external high-importance senders)
-        - "Pending Actions" (has tasks_for_me)
-        - "Low Priority/Marketing" (urgency <= 2)
-        
-        Return a JSON object with this structure:
-        {{
-            "themes": {{
-                "Active Work Projects": {{
-                    "description": "Emails about ongoing work projects and deliverables",
-                    "email_indices": [indices of work emails],
-                    "average_urgency": 4.0,
-                    "key_entities": {{"people": ["colleagues"], "projects": ["GEN-IMPACT"]}}
-                }},
-                "Marketing & Newsletters": {{
-                    "description": "Promotional and marketing emails",
-                    "email_indices": [indices of marketing emails],
-                    "average_urgency": 1.0,
-                    "key_entities": {{"companies": ["marketing companies"]}}
-                }}
-            }},
-            "uncategorized_indices": []
-        }}
-        
-        Create themes that separate work from noise. Return ONLY the JSON object."""
+        # Build structured prompt for JSON output
+        prompt = f"""You are a data analysis assistant. Your response MUST be valid JSON only, with no additional text before or after.
+
+TASK: Analyze these emails and group them into coherent themes, prioritizing work-related content.
+
+INPUT DATA:
+{json.dumps(emails_data, indent=2)}
+
+THEME CREATION RULES:
+1. WORK PROJECTS: Group by specific projects (urgency >= 3)
+2. KEY PEOPLE: Group emails from important senders
+3. ACTION ITEMS: Group emails with tasks_for_me
+4. MEETINGS & EVENTS: Calendar and meeting items
+5. MARKETING: Low urgency (score <= 2) promotional content
+
+OUTPUT FORMAT (return ONLY this JSON structure):
+{{
+  "themes": {{
+    "Active Work Projects": {{
+      "description": "string describing theme",
+      "email_indices": [0, 1, 2],
+      "average_urgency": 4.0,
+      "key_entities": {{"people": ["name1"], "projects": ["project1"]}}
+    }}
+  }},
+  "uncategorized_indices": [3, 4]
+}}
+
+CRITICAL: Your entire response must be a single, valid JSON object. Do not include any explanatory text, markdown formatting, or anything outside of the JSON structure. Start with {{ and end with }}."""
         
         try:
             result = await llm_service.simple_completion(
@@ -511,37 +526,39 @@ class ProactiveSynthesisAgent(BaseAgent):
                 "emails": theme_emails
             }
         
-        prompt = f"""Analyze these themed groups to identify priorities. Focus on WORK-RELATED items and genuine commitments.
-        The user has ADHD/autism traits and needs clear, actionable guidance.
-        
-        Themes with enriched data:
-        {json.dumps(themes_summary, indent=2)}
-        
-        Priority Extraction Rules:
-        1. URGENT: Only items with urgency_score >= 4 AND concrete commitments.tasks_for_me
-        2. IMPORTANT: Work-related items (urgency_score >= 3) with specific actions needed
-        3. SOCIAL: Emails with is_reply_needed=true from high/medium importance senders
-        4. DEADLINES: Extract from commitments.deadlines field
-        5. IGNORE: Marketing emails (urgency_score <= 2), newsletters, promotional content
-        
-        Return your analysis as a JSON object:
-        {{
-            "priorities": {{
-                "urgent": ["Specific work task with deadline - include WHO requested it"],
-                "important": ["Important work item - include project name if mentioned"],
-                "deferred": ["Low priority but still work-related"]
-            }},
-            "social_notes": {{
-                "replies_needed": ["Reply to [Name] about [specific topic]"],
-                "relationship_nudges": ["Check in with [Name] - last contact [X days] ago"]
-            }},
-            "deadlines": ["YYYY-MM-DD: [Project/Task] - [Description]"],
-            "focus_recommendation": "Most critical SINGLE action to take right now",
-            "work_projects_mentioned": ["List any specific projects like GEN-IMPACT found in emails"]
-        }}
-        
-        Be SPECIFIC - use actual names, projects, and deadlines from the data.
-        Return ONLY the JSON object."""
+        # Build structured prompt for priority analysis
+        prompt = f"""You are a priority analysis assistant. Your response MUST be valid JSON only, with no additional text.
+
+CONTEXT: Analyzing email themes for a user with ADHD/autism who needs clear, actionable guidance.
+
+INPUT DATA:
+{json.dumps(themes_summary, indent=2)}
+
+PRIORITY RULES:
+1. URGENT: urgency_score >= 4 with concrete tasks
+2. IMPORTANT: urgency_score >= 3 with actions needed
+3. SOCIAL: is_reply_needed=true from important senders
+4. DEADLINES: Extract from commitments.deadlines
+5. IGNORE: urgency_score <= 2 (marketing/newsletters)
+
+OUTPUT FORMAT (return ONLY this JSON):
+{{
+  "priorities": {{
+    "urgent": ["Task description with WHO requested"],
+    "important": ["Work item with project name"],
+    "deferred": ["Lower priority work items"]
+  }},
+  "social_notes": {{
+    "replies_needed": ["Reply to Name about topic"],
+    "relationship_nudges": ["Check in with Name"]
+  }},
+  "deadlines": ["2024-01-15: Project - Description"],
+  "focus_recommendation": "Single most critical action",
+  "work_projects_mentioned": ["project1", "project2"]
+}}
+
+Be SPECIFIC using actual names and projects from the data.
+CRITICAL: Your entire response must be a single, valid JSON object. Do not include any explanatory text, markdown formatting, or anything outside of the JSON structure. Start with {{ and end with }}."""
         
         try:
             result = await llm_service.simple_completion(
@@ -550,17 +567,21 @@ class ProactiveSynthesisAgent(BaseAgent):
                 max_tokens=1000
             )
             
-            # Parse JSON result
-            try:
-                analysis = json.loads(result.strip())
-                # Ensure all expected keys exist
+            # Parse JSON result using safe parser
+            analysis = self._safe_parse_json(result)
+            
+            if analysis:
+                # Ensure all expected keys exist with proper structure
                 if "priorities" not in analysis:
                     analysis["priorities"] = {"urgent": [], "important": [], "deferred": []}
                 if "social_notes" not in analysis:
-                    analysis["social_notes"] = []
+                    analysis["social_notes"] = {"replies_needed": [], "relationship_nudges": []}
+                if not isinstance(analysis.get("social_notes"), dict):
+                    # Convert old format to new format
+                    analysis["social_notes"] = {"replies_needed": [], "relationship_nudges": []}
                 return analysis
-            except json.JSONDecodeError:
-                logger.warning("Failed to parse JSON, using fallback parsing")
+            else:
+                logger.warning("Failed to parse JSON priority analysis, using fallback parsing")
                 # Fallback to string parsing if JSON fails
                 return {
                     "priorities": {
@@ -568,7 +589,10 @@ class ProactiveSynthesisAgent(BaseAgent):
                         "important": self._extract_important_items(result),
                         "deferred": self._extract_deferred_items(result)
                     },
-                    "social_notes": self._extract_social_notes(result),
+                    "social_notes": {
+                        "replies_needed": self._extract_social_notes(result),
+                        "relationship_nudges": []
+                    },
                     "raw_analysis": result
                 }
             
@@ -638,33 +662,74 @@ Here is your pre-computed analysis summary:
 ## Goal Alignment
 - **Active Goals:** {', '.join(user_goals) if user_goals else 'No goals set yet'}
 
-Based *only* on the summary above, compose a briefing for your user. Structure your response into three distinct sections in markdown:
+Based *only* on the summary above, compose a briefing for your user.
+Return your response as a single, valid JSON object with the following structure.
+Do not include any other text, markdown, or explanations. Your entire response must be the JSON object.
 
-### 🎯 Top 3 Priorities for Now
-List the three most critical actions. For each, provide a "why" (e.g., "to unblock the team") and a suggested "first step" to make it less daunting.
+{{
+  "top_priorities": [
+    {{
+      "title": "Most critical action to take",
+      "why": "The reason this is important (e.g., 'to unblock the team')",
+      "first_step": "A small, concrete first action to reduce overwhelm"
+    }},
+    {{
+      "title": "Second priority action",
+      "why": "Why this matters now",
+      "first_step": "Simple starting point"
+    }},
+    {{
+      "title": "Third priority action",
+      "why": "Importance reason",
+      "first_step": "Easy first step"
+    }}
+  ],
+  "on_your_radar": [
+    {{
+      "title": "Important but not urgent topic",
+      "context": "Brief note on why this is on the radar"
+    }},
+    {{
+      "title": "Another topic to keep in mind",
+      "context": "Why it matters for later"
+    }}
+  ],
+  "connections": [
+    {{
+      "person": "Name of the person",
+      "suggestion": "A simple, concrete action (e.g., 'Draft a quick reply acknowledging their email')"
+    }}
+  ]
+}}
 
-### 📡 On Your Radar
-Briefly mention 2-3 important but not urgent topics. Frame these as things to "keep in mind" or "think about," not immediate pressures.
-
-### 👥 Connections
-Highlight key social interactions. Suggest a simple, concrete action (e.g., "Draft a quick reply to Jane acknowledging her email.").
-
-Remember: Be warm but concise. Reduce cognitive load. Make the complex feel manageable."""
+Remember: Be warm but concise. Focus on reducing cognitive load. Make complex tasks feel manageable.
+CRITICAL: Your entire response must be a single, valid JSON object. Do not include any explanatory text, markdown formatting, or anything outside of the JSON structure. Start with {{ and end with }}."""
         
         try:
-            result = await llm_service.simple_completion(
+            result_str = await llm_service.simple_completion(
                 prompt=prompt,
                 complexity=ModelComplexity.COMPLEX,  # COMPLEX model for final synthesis
                 max_tokens=1500
             )
             
+            # Parse the JSON response
+            briefing_json = self._safe_parse_json(result_str)
+            
+            if not briefing_json:
+                # Handle JSON parsing failure
+                logger.warning(f"Could not parse advisor insight JSON. Raw response:\n---\n{result_str}\n---")
+                briefing_json = {
+                    "error": "Failed to generate structured briefing",
+                    "raw_response": result_str[:500]  # Include truncated response for debugging
+                }
+            
             insights = []
             
-            # Create daily briefing insight
+            # Create daily briefing insight with JSON content
             insights.append({
                 "type": "daily_briefing",
                 "title": "Your Intelligent Daily Brief",
-                "content": result,
+                "content": briefing_json,  # Store the dict, not the string
                 "priority": "high" if analysis['priorities']['urgent'] else "normal",
                 "metadata": {
                     "urgent_count": len(analysis['priorities']['urgent']),
@@ -732,6 +797,46 @@ Remember: Be warm but concise. Reduce cognitive load. Make the complex feel mana
         logger.info(f"Synthesis complete: Generated {len(insights)} insights")
         return insights
     
+    def _safe_parse_json(self, llm_response: str) -> Optional[Dict[str, Any]]:
+        """
+        Safely parse JSON from LLM response with multiple fallback strategies.
+        
+        Args:
+            llm_response: Raw LLM response that should be JSON
+            
+        Returns:
+            Parsed JSON dict or None if parsing fails
+        """
+        # Strategy 1: Direct parse
+        try:
+            return json.loads(llm_response.strip())
+        except json.JSONDecodeError as e:
+            logger.debug(f"Direct JSON parse failed: {e}")
+        
+        # Strategy 2: Extract JSON from markdown code blocks
+        import re
+        json_pattern = r'```(?:json)?\s*(\{.*?\})\s*```'
+        match = re.search(json_pattern, llm_response, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError as e:
+                logger.debug(f"Markdown JSON parse failed: {e}")
+        
+        # Strategy 3: Find first { and last } 
+        start_idx = llm_response.find('{')
+        end_idx = llm_response.rfind('}')
+        if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+            try:
+                json_str = llm_response[start_idx:end_idx+1]
+                return json.loads(json_str)
+            except json.JSONDecodeError as e:
+                logger.debug(f"Bracket extraction JSON parse failed: {e}")
+        
+        # Log the full response for debugging when all strategies fail
+        logger.warning(f"Failed to parse JSON from LLM. Raw response:\n---START---\n{llm_response}\n---END---")
+        return None
+    
     def _parse_json_themes(self, llm_response: str, working_memory: Dict[str, Any]) -> Dict[str, Any]:
         """
         Parse JSON response from thematic analysis.
@@ -743,34 +848,38 @@ Remember: Be warm but concise. Reduce cognitive load. Make the complex feel mana
         Returns:
             Dictionary with themes containing actual email objects
         """
-        try:
-            # Try to parse as JSON
-            result = json.loads(llm_response.strip())
-            
-            # Map indices back to actual email objects
-            themes = {}
-            emails = working_memory.get("emails", [])
-            
-            for theme_name, theme_data in result.get("themes", {}).items():
-                theme_emails = []
-                for idx in theme_data.get("email_indices", []):
+        # Use safe JSON parser
+        result = self._safe_parse_json(llm_response)
+        
+        if result:
+            try:
+                # Map indices back to actual email objects
+                themes = {}
+                emails = working_memory.get("emails", [])
+                
+                for theme_name, theme_data in result.get("themes", {}).items():
+                    theme_emails = []
+                    for idx in theme_data.get("email_indices", []):
+                        if 0 <= idx < len(emails):
+                            theme_emails.append(emails[idx])
+                    if theme_emails:
+                        themes[theme_name] = theme_emails
+                
+                # Handle uncategorized
+                uncategorized = []
+                for idx in result.get("uncategorized_indices", []):
                     if 0 <= idx < len(emails):
-                        theme_emails.append(emails[idx])
-                if theme_emails:
-                    themes[theme_name] = theme_emails
-            
-            # Handle uncategorized
-            uncategorized = []
-            for idx in result.get("uncategorized_indices", []):
-                if 0 <= idx < len(emails):
-                    uncategorized.append(emails[idx])
-            
-            return {"themes": themes, "uncategorized": uncategorized}
-            
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            logger.warning(f"Failed to parse JSON themes, using fallback: {e}")
-            # Fallback to old string parsing method
-            return self._parse_themes(llm_response, working_memory)
+                        uncategorized.append(emails[idx])
+                
+                return {"themes": themes, "uncategorized": uncategorized}
+                
+            except (KeyError, TypeError) as e:
+                logger.warning(f"JSON structure invalid, using fallback: {e}")
+        else:
+            logger.warning("Failed to parse JSON themes, using fallback string parsing")
+        
+        # Fallback to old string parsing method
+        return self._parse_themes(llm_response, working_memory)
     
     def _parse_themes(self, llm_response: str, working_memory: Dict[str, Any]) -> Dict[str, Any]:
         """

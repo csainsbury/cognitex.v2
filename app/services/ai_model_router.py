@@ -27,6 +27,7 @@ class ModelConfig:
     """Configuration for a model"""
     name: str
     model_id: str
+    provider: str  # Provider for this model (anthropic, openai)
     max_tokens: int
     temperature: float
     cost_per_1k_input: float  # in USD
@@ -44,6 +45,7 @@ class AIModelRouter:
             ModelComplexity.SIMPLE: ModelConfig(
                 name="Claude Haiku",
                 model_id=AnthropicModel.HAIKU,
+                provider="anthropic",
                 max_tokens=4096,
                 temperature=0.3,
                 cost_per_1k_input=0.00025,
@@ -52,6 +54,7 @@ class AIModelRouter:
             ModelComplexity.MEDIUM: ModelConfig(
                 name="Claude Sonnet",
                 model_id=AnthropicModel.SONNET,
+                provider="anthropic",
                 max_tokens=8192,
                 temperature=0.5,
                 cost_per_1k_input=0.003,
@@ -60,6 +63,7 @@ class AIModelRouter:
             ModelComplexity.COMPLEX: ModelConfig(
                 name="Claude Opus",
                 model_id=AnthropicModel.OPUS,
+                provider="anthropic",
                 max_tokens=4096,
                 temperature=0.7,
                 cost_per_1k_input=0.015,
@@ -243,3 +247,5 @@ class AIModelRouter:
 
 # Global instance
 ai_model_router = AIModelRouter()
+# Alias for backward compatibility
+model_router = ai_model_router

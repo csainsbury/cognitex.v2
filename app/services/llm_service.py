@@ -1,15 +1,14 @@
 """
-LLM service for AI operations with tool calling support
+LLM Service - Generic wrapper for LLM API providers
+This service provides a stateless interface to LLM providers without domain-specific logic.
 """
-import logging
-from typing import List, Dict, Any, Optional, Callable
 import json
-import inspect
+import logging
+from typing import Dict, Any, List, Optional, Callable
 from enum import Enum
-from datetime import datetime, timedelta
 
 from app.config import settings
-from app.services.ai_model_router import ai_model_router, ModelComplexity
+from app.services.ai_model_router import ModelComplexity, model_router
 
 logger = logging.getLogger(__name__)
 
@@ -17,172 +16,155 @@ class LLMProvider(str, Enum):
     """Supported LLM providers"""
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
-    LOCAL = "local"
-
+    
 class LLMService:
     """
-    Service for interacting with LLMs with tool calling support.
-    Supports multiple providers and model routing.
+    Service for interacting with Large Language Models.
+    This is a stateless, generic service that passes requests to LLM providers.
+    All domain-specific logic should be in the agents, not here.
     """
     
     def __init__(self):
-        """Initialize LLM service"""
+        """Initialize LLM service with available providers"""
         self.anthropic_client = None
         self.openai_client = None
         
-        # Initialize clients based on available API keys
+        # Initialize Anthropic client if API key is available
         if settings.ANTHROPIC_API_KEY:
             try:
-                import anthropic
-                self.anthropic_client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+                from anthropic import Anthropic
+                self.anthropic_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
                 logger.info("Anthropic client initialized")
             except ImportError:
                 logger.warning("Anthropic library not installed")
+            except Exception as e:
+                logger.error(f"Failed to initialize Anthropic client: {e}")
         
+        # Initialize OpenAI client if API key is available
         if settings.OPENAI_API_KEY:
             try:
-                import openai
-                openai.api_key = settings.OPENAI_API_KEY
-                self.openai_client = openai
+                from openai import OpenAI
+                self.openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
                 logger.info("OpenAI client initialized")
             except ImportError:
                 logger.warning("OpenAI library not installed")
+            except Exception as e:
+                logger.error(f"Failed to initialize OpenAI client: {e}")
     
-    def function_to_tool_schema(self, func: Callable) -> Dict[str, Any]:
+    async def simple_completion(
+        self,
+        prompt: str,
+        complexity: ModelComplexity = ModelComplexity.SIMPLE,
+        max_tokens: int = 1024,
+        temperature: float = 0.7
+    ) -> str:
         """
-        Convert a Python function to a tool schema for LLM.
+        Simple text completion without tools.
         
         Args:
-            func: Python function with docstring and type hints
+            prompt: The prompt to send to the LLM
+            complexity: Model complexity level for router
+            max_tokens: Maximum tokens in response
+            temperature: Temperature for response generation
             
         Returns:
-            Tool schema dictionary
+            The text response from the LLM
         """
-        # Get function signature
-        sig = inspect.signature(func)
+        model = model_router.select_model(complexity)
         
-        # Parse docstring
-        docstring = inspect.getdoc(func) or ""
-        lines = docstring.split('\n')
-        description = lines[0] if lines else func.__name__
+        messages = [{"role": "user", "content": prompt}]
         
-        # Build parameters schema
-        parameters = {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
+        if self.anthropic_client and model.provider == "anthropic":
+            try:
+                response = self.anthropic_client.messages.create(
+                    model=model.model_id,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    messages=messages
+                )
+                return response.content[0].text
+            except Exception as e:
+                logger.error(f"Anthropic API error: {e}")
+                return f"Error: {str(e)}"
         
-        for param_name, param in sig.parameters.items():
-            # Skip 'self' and special parameters
-            if param_name in ['self', 'cls']:
-                continue
-            
-            # Get type hint
-            param_type = param.annotation
-            
-            # Convert Python type to JSON schema type
-            json_type = "string"  # default
-            if param_type == int:
-                json_type = "integer"
-            elif param_type == float:
-                json_type = "number"
-            elif param_type == bool:
-                json_type = "boolean"
-            elif param_type == list or str(param_type).startswith('List'):
-                json_type = "array"
-            elif param_type == dict or str(param_type).startswith('Dict'):
-                json_type = "object"
-            
-            # Add to schema
-            parameters["properties"][param_name] = {
-                "type": json_type,
-                "description": f"Parameter {param_name}"
-            }
-            
-            # Check if required
-            if param.default == inspect.Parameter.empty:
-                parameters["required"].append(param_name)
+        elif self.openai_client and model.provider == "openai":
+            try:
+                response = self.openai_client.chat.completions.create(
+                    model=model.model_id,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    messages=messages
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.error(f"OpenAI API error: {e}")
+                return f"Error: {str(e)}"
         
-        return {
-            "name": func.__name__,
-            "description": description,
-            "parameters": parameters
-        }
+        return "No LLM provider available"
     
     async def execute_with_tools(
         self,
         prompt: str,
-        tools: List[Callable],
-        model: Optional[str] = None,
-        complexity: Optional[ModelComplexity] = None,
-        max_iterations: int = 5,
+        tools: Dict[str, Callable],
+        complexity: ModelComplexity = ModelComplexity.MEDIUM,
+        max_iterations: int = 3,
         **kwargs
     ) -> Dict[str, Any]:
         """
-        Execute LLM reasoning with tool calling support.
+        Execute prompt with access to tools.
         
         Args:
-            prompt: The user prompt/task
-            tools: List of callable functions the LLM can use
-            model: Model to use (if None, uses default)
-            max_iterations: Maximum tool calling iterations
-            **kwargs: Additional arguments for tool execution
+            prompt: The initial prompt
+            tools: Dictionary of tool name to callable
+            complexity: Model complexity level
+            max_iterations: Maximum tool-use iterations
+            **kwargs: Additional arguments to pass to tools
             
         Returns:
-            Dictionary with final response and tool call history
+            Dictionary with response and tool history
         """
-        # Convert tools to schemas
-        tool_schemas = [self.function_to_tool_schema(tool) for tool in tools]
-        tool_map = {tool.__name__: tool for tool in tools}
+        model = model_router.select_model(complexity)
         
-        # Select model based on complexity if not specified
-        if not model and complexity:
-            model_config = ai_model_router.select_model(complexity)
-            model = model_config.model_id
-            logger.info(f"Selected model {model_config.name} for complexity {complexity}")
+        # Convert tools to API format
+        tool_schemas = self._build_tool_schemas(tools)
         
-        # Build initial messages
-        messages = [
-            {
-                "role": "system",
-                "content": "You are a helpful AI assistant with access to tools. Use them to complete the user's request."
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-        
-        # Tool calling loop
-        iterations = 0
+        # Initialize conversation
+        messages = [{"role": "user", "content": prompt}]
         tool_history = []
         
-        while iterations < max_iterations:
-            iterations += 1
-            
+        for iteration in range(max_iterations):
             # Call LLM with tools
-            response = await self._call_llm_with_tools(
-                messages=messages,
-                tools=tool_schemas,
-                model=model
-            )
+            if self.anthropic_client and model.provider == "anthropic":
+                response = await self._call_anthropic_with_tools(
+                    messages=messages,
+                    tools=tool_schemas,
+                    model=model.model_id
+                )
+            elif self.openai_client and model.provider == "openai":
+                response = await self._call_openai_with_tools(
+                    messages=messages,
+                    tools=tool_schemas,
+                    model=model.model_id
+                )
+            else:
+                return {
+                    "response": "No LLM provider available",
+                    "tool_history": [],
+                    "iterations": 0
+                }
             
-            # Check if LLM wants to use a tool
-            tool_calls = response.get("tool_calls")
-            if tool_calls and isinstance(tool_calls, list):
-                for tool_call in tool_calls:
+            # Process response
+            if "tool_calls" in response:
+                # Execute tools
+                for tool_call in response["tool_calls"]:
                     tool_name = tool_call["name"]
                     tool_args = tool_call.get("arguments", {})
                     
-                    logger.info(f"LLM calling tool: {tool_name} with args: {tool_args}")
-                    
-                    # Execute tool
-                    if tool_name in tool_map:
+                    if tool_name in tools:
                         try:
                             # Add kwargs to tool arguments
                             tool_args.update(kwargs)
-                            result = tool_map[tool_name](**tool_args)
+                            result = tools[tool_name](**tool_args)
                             
                             tool_history.append({
                                 "tool": tool_name,
@@ -191,345 +173,209 @@ class LLMService:
                             })
                             
                             # Add tool result to conversation
-                            tool_result_json = json.dumps(result, default=str)
-                            logger.info(f"Tool {tool_name} returned {len(result)} items" if isinstance(result, list) else f"Tool result type: {type(result)}")
                             messages.append({
                                 "role": "assistant",
-                                "content": f"Tool {tool_name} returned: {tool_result_json}"
+                                "content": f"I'll use the {tool_name} tool."
+                            })
+                            messages.append({
+                                "role": "user",
+                                "content": f"Tool result: {json.dumps(result, default=str)[:5000]}"  # Limit size
                             })
                             
                         except Exception as e:
                             logger.error(f"Error executing tool {tool_name}: {e}")
                             messages.append({
-                                "role": "assistant",
-                                "content": f"Error executing {tool_name}: {str(e)}"
+                                "role": "user",
+                                "content": f"Tool error: {str(e)}"
                             })
                     else:
-                        logger.error(f"Unknown tool: {tool_name}")
+                        logger.error(f"Unknown tool requested: {tool_name}")
             else:
                 # LLM provided final answer
                 return {
                     "response": response.get("content", ""),
-                    "final_response": response.get("final_response", response.get("content", "")),
+                    "final_response": response.get("content", ""),
                     "tool_history": tool_history,
-                    "tool_calls": response.get("tool_calls", len(tool_history)),
-                    "iterations": iterations
+                    "tool_calls": len(tool_history),
+                    "iterations": iteration + 1
                 }
         
         return {
-            "response": "Max iterations reached without final answer",
+            "response": "Max iterations reached",
             "tool_history": tool_history,
-            "iterations": iterations
+            "iterations": max_iterations
         }
     
-    async def _call_llm_with_tools(
+    async def _call_anthropic_with_tools(
         self,
         messages: List[Dict],
         tools: List[Dict],
-        model: Optional[str] = None
+        model: str
     ) -> Dict[str, Any]:
         """
-        Call LLM with tool definitions.
-        This is a simplified version - you'd implement actual API calls here.
-        
-        Args:
-            messages: Conversation history
-            tools: Tool schemas
-            model: Model to use
-            
-        Returns:
-            LLM response with potential tool calls
+        Pure passthrough to Anthropic API with tool support.
+        No domain-specific logic should be here.
         """
-        # For now, return a mock response
-        # In production, this would call Anthropic/OpenAI APIs
-        
-        if self.anthropic_client and settings.ANTHROPIC_API_KEY:
-            # Use Anthropic Claude
-            return await self._call_anthropic(messages, tools, model)
-        elif self.openai_client and settings.OPENAI_API_KEY:
-            # Use OpenAI
-            return await self._call_openai(messages, tools, model)
-        else:
-            # Fallback to mock response for testing
-            return self._mock_llm_response(messages, tools)
-    
-    async def _call_anthropic(
-        self,
-        messages: List[Dict],
-        tools: List[Dict],
-        model: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Call Anthropic Claude API"""
         if not self.anthropic_client:
             logger.error("Anthropic client not initialized")
-            return self._mock_llm_response(messages, tools)
+            return {"content": "Anthropic client not available"}
         
         try:
-            # Use default model if not specified
-            if not model:
-                model = "claude-3-haiku-20240307"  # Default to Haiku for cost efficiency
+            # Convert tool schemas to Anthropic format
+            anthropic_tools = []
+            for tool in tools:
+                anthropic_tool = {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "input_schema": tool.get("parameters", {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    })
+                }
+                anthropic_tools.append(anthropic_tool)
             
-            # Convert messages to Anthropic format
+            # Separate system message from conversation
             system_message = None
             anthropic_messages = []
             
             for msg in messages:
                 if msg["role"] == "system":
                     system_message = msg["content"]
-                elif msg["role"] == "user":
-                    anthropic_messages.append({
-                        "role": "user",
-                        "content": msg["content"]
-                    })
-                elif msg["role"] == "assistant":
-                    anthropic_messages.append({
-                        "role": "assistant",
-                        "content": msg["content"]
-                    })
-            
-            # If we have tools and this is the first call, let Claude decide what to do
-            if tools and len(anthropic_messages) == 1:
-                # Build tool descriptions for Claude
-                tool_descriptions = []
-                for tool in tools:
-                    desc = f"Tool: {tool['name']}\n"
-                    desc += f"Description: {tool['description']}\n"
-                    if 'parameters' in tool and 'properties' in tool['parameters']:
-                        desc += "Parameters:\n"
-                        for param, details in tool['parameters']['properties'].items():
-                            desc += f"  - {param}: {details.get('description', 'No description')}\n"
-                    tool_descriptions.append(desc)
-                
-                # Create an enhanced prompt that includes tool information
-                enhanced_prompt = f"""
-{anthropic_messages[0]['content']}
-
-You have access to the following tools:
-
-{''.join(tool_descriptions)}
-
-Based on the user's request above, decide which tool to use and with what parameters.
-Respond with a JSON object in this format:
-{{
-    "tool_name": "<tool_name>",
-    "arguments": {{
-        // tool arguments
-    }}
-}}
-
-Think carefully about what would best serve the user's needs. Consider:
-- The time range that would capture relevant information
-- The number of results needed for comprehensive analysis
-- Any specific search criteria that would help find the most relevant items
-"""
-                
-                # Call Claude to decide on tool use
-                response = self.anthropic_client.messages.create(
-                    model=model,
-                    max_tokens=1024,
-                    system=system_message or "You are an intelligent assistant that can use tools to help users.",
-                    messages=[{"role": "user", "content": enhanced_prompt}]
-                )
-                
-                # Parse Claude's response to get tool call
-                try:
-                    response_text = response.content[0].text
-                    # Try to extract JSON from response
-                    import re
-                    json_match = re.search(r'\{[^}]+\}', response_text, re.DOTALL)
-                    if json_match:
-                        tool_decision = json.loads(json_match.group())
-                        return {
-                            "tool_calls": [{
-                                "name": tool_decision.get("tool_name", "search_emails"),
-                                "arguments": tool_decision.get("arguments", {})
-                            }]
-                        }
-                except (json.JSONDecodeError, AttributeError) as e:
-                    logger.warning(f"Could not parse tool decision from Claude: {e}")
-                    # Fallback: use a sensible default
-                    return {
-                        "tool_calls": [{
-                            "name": "search_emails",
-                            "arguments": {
-                                "query": "newer_than:7d",
-                                "max_results": 100
-                            }
-                        }]
-                    }
-            
-            # We have tool results - generate summary
-            elif len(messages) > 2:  # We have tool results
-                # Build a proper conversation for Claude with the actual email data
-                claude_messages = []
-                
-                # Add the original request
-                claude_messages.append({
-                    "role": "user",
-                    "content": anthropic_messages[0]["content"] if anthropic_messages else "Summarize urgent emails"
-                })
-                
-                # Extract and parse tool results
-                email_data = None
-                for msg in messages[2:]:  # Skip system and initial user message
-                    if msg["role"] == "assistant" and "Tool" in msg["content"]:
-                        # Parse the JSON from tool result
-                        try:
-                            if "returned:" in msg["content"]:
-                                json_str = msg["content"].split("returned:", 1)[1].strip()
-                                email_data = json.loads(json_str)
-                        except json.JSONDecodeError:
-                            logger.error(f"Failed to parse tool result: {msg['content'][:200]}")
-                
-                # If we have email data, create proper summary
-                if email_data and isinstance(email_data, list) and len(email_data) > 0:
-                    email_summary = f"Here are ALL {len(email_data)} emails found:\n\n"
-                    # Pass ALL emails to Claude for intelligent assessment
-                    for i, email in enumerate(email_data, 1):
-                        email_summary += f"Email {i}:\n"
-                        email_summary += f"From: {email.get('sender', email.get('from', 'Unknown'))}\n"
-                        email_summary += f"Subject: {email.get('subject', 'No subject')}\n"
-                        email_summary += f"Date: {email.get('date', 'Unknown')}\n"
-                        if email.get('snippet'):
-                            email_summary += f"Preview: {email.get('snippet')[:150]}\n"
-                        email_summary += "\n"
-                    
-                    claude_messages.append({
-                        "role": "assistant",
-                        "content": email_summary
-                    })
                 else:
-                    # No emails found
-                    claude_messages.append({
-                        "role": "assistant",
-                        "content": "No emails were found matching the search criteria."
-                    })
-                
-                # Ask Claude to summarize based on the tool results
-                claude_messages.append({
-                    "role": "user",
-                    "content": "Based on the emails found above, please provide a concise summary highlighting the most important/urgent items and any required actions."
-                })
-                
-                # Call Claude with the full context
-                response = self.anthropic_client.messages.create(
-                    model=model,
-                    max_tokens=1024,
-                    system="You are a helpful AI assistant analyzing emails. Provide concise, actionable summaries.",
-                    messages=claude_messages
-                )
-                
-                return {
-                    "content": response.content[0].text,
-                    "final_response": response.content[0].text
-                }
+                    anthropic_messages.append(msg)
             
-            # Default response if no special handling
+            # Make the API call - pure passthrough
             response = self.anthropic_client.messages.create(
                 model=model,
-                max_tokens=1024,
-                system=system_message or "You are a helpful AI assistant.",
-                messages=anthropic_messages if anthropic_messages else [{"role": "user", "content": "Hello"}]
+                max_tokens=2048,
+                system=system_message,
+                messages=anthropic_messages,
+                tools=anthropic_tools if anthropic_tools else None,
+                tool_choice={"type": "auto"} if anthropic_tools else None
             )
             
-            return {
-                "content": response.content[0].text
-            }
+            # Parse response
+            result = {}
+            
+            # Check for tool use
+            if hasattr(response, 'content') and response.content:
+                for content_block in response.content:
+                    if hasattr(content_block, 'type'):
+                        if content_block.type == 'text':
+                            result["content"] = content_block.text
+                        elif content_block.type == 'tool_use':
+                            if "tool_calls" not in result:
+                                result["tool_calls"] = []
+                            result["tool_calls"].append({
+                                "name": content_block.name,
+                                "arguments": content_block.input
+                            })
+            
+            return result
             
         except Exception as e:
             logger.error(f"Error calling Anthropic API: {e}")
-            return self._mock_llm_response(messages, tools)
+            return {"content": f"API Error: {str(e)}"}
     
-    async def _call_openai(
+    async def _call_openai_with_tools(
         self,
         messages: List[Dict],
         tools: List[Dict],
-        model: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Call OpenAI API"""
-        # Implementation would go here
-        # For now, return mock
-        return self._mock_llm_response(messages, tools)
-    
-    def _mock_llm_response(
-        self,
-        messages: List[Dict],
-        tools: List[Dict]
+        model: str
     ) -> Dict[str, Any]:
         """
-        Mock LLM response for testing without API keys.
+        Pure passthrough to OpenAI API with tool support.
         """
-        user_message = messages[-1]["content"] if messages else ""
+        if not self.openai_client:
+            logger.error("OpenAI client not initialized")
+            return {"content": "OpenAI client not available"}
         
-        # Check if this is asking for email processing
-        if "email" in user_message.lower():
-            # First, use appropriate tool based on request
-            if not any("Tool" in m.get("content", "") for m in messages):
-                # Determine which tool to use based on the actual request
-                if "process" in user_message.lower() or "new" in user_message.lower():
-                    return {
-                        "tool_calls": [{
-                            "name": "get_emails_since",
-                            "arguments": {
-                                "since": (datetime.utcnow() - timedelta(hours=24)).isoformat(),
-                                "max_results": 50
-                            }
-                        }]
+        try:
+            # Convert tools to OpenAI format
+            openai_tools = []
+            for tool in tools:
+                openai_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool["name"],
+                        "description": tool["description"],
+                        "parameters": tool.get("parameters", {})
                     }
-                else:
-                    # Generic search
-                    return {
-                        "tool_calls": [{
-                            "name": "search_emails",
-                            "arguments": {
-                                "query": "is:unread",
-                                "max_results": 10
-                            }
-                        }]
-                    }
-            else:
-                # We've already searched, provide summary
-                return {
-                    "content": "Based on the email analysis, I've identified several items that require your attention. The analysis includes priority levels, required responses, and extracted action items."
-                }
-        
-        # Default response
-        return {
-            "content": "I've processed your request. Based on the available tools and data, the task has been completed."
-        }
-    
-    async def simple_completion(
-        self,
-        prompt: str,
-        model: Optional[str] = None,
-        complexity: Optional[ModelComplexity] = None,
-        max_tokens: int = 1000
-    ) -> str:
-        """
-        Simple text completion without tools.
-        
-        Args:
-            prompt: The prompt
-            model: Specific model to use (optional)
-            complexity: Model complexity level (used if model not specified)
-            max_tokens: Maximum tokens to generate
+                })
             
-        Returns:
-            Generated text
+            # Make the API call
+            response = self.openai_client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=openai_tools if openai_tools else None,
+                tool_choice="auto" if openai_tools else None
+            )
+            
+            # Parse response
+            result = {}
+            choice = response.choices[0]
+            
+            if choice.message.content:
+                result["content"] = choice.message.content
+            
+            if hasattr(choice.message, 'tool_calls') and choice.message.tool_calls:
+                result["tool_calls"] = []
+                for tool_call in choice.message.tool_calls:
+                    result["tool_calls"].append({
+                        "name": tool_call.function.name,
+                        "arguments": json.loads(tool_call.function.arguments)
+                    })
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error calling OpenAI API: {e}")
+            return {"content": f"API Error: {str(e)}"}
+    
+    def _build_tool_schemas(self, tools: Dict[str, Callable]) -> List[Dict]:
         """
-        # Select model based on complexity if not explicitly provided
-        if not model and complexity:
-            model_config = ai_model_router.select_model(complexity)
-            model = model_config.model_id
-            logger.info(f"Selected model {model_config.name} for complexity {complexity}")
-        elif not model:
-            # Default to SIMPLE complexity
-            model_config = ai_model_router.select_model(ModelComplexity.SIMPLE)
-            model = model_config.model_id
+        Build tool schemas from callable functions.
+        """
+        schemas = []
         
-        messages = [{"role": "user", "content": prompt}]
-        response = await self._call_llm_with_tools(messages, [], model)
-        return response.get("content", "")
+        for name, func in tools.items():
+            # Extract schema from function docstring and annotations
+            schema = {
+                "name": name,
+                "description": func.__doc__ or f"Tool: {name}",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+            
+            # Try to extract parameters from function annotations
+            import inspect
+            sig = inspect.signature(func)
+            for param_name, param in sig.parameters.items():
+                if param_name not in ['self', 'cls']:
+                    param_schema = {"type": "string"}  # Default type
+                    
+                    # Try to infer type from annotation
+                    if param.annotation != inspect.Parameter.empty:
+                        if param.annotation == int:
+                            param_schema["type"] = "integer"
+                        elif param.annotation == bool:
+                            param_schema["type"] = "boolean"
+                        elif param.annotation == float:
+                            param_schema["type"] = "number"
+                    
+                    schema["parameters"]["properties"][param_name] = param_schema
+                    
+                    # Mark as required if no default value
+                    if param.default == inspect.Parameter.empty:
+                        schema["parameters"]["required"].append(param_name)
+            
+            schemas.append(schema)
+        
+        return schemas
 
-# Global instance
+# Create singleton instance
 llm_service = LLMService()

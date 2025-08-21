@@ -700,44 +700,82 @@
             let priorities = [];
             
             if (briefing && briefing.content) {
-                // Parse priorities from daily briefing
-                const lines = briefing.content.split('\n');
-                let inPriorities = false;
-                
-                lines.forEach(line => {
-                    if (line.includes('Top 3 Priorities') || line.includes('URGENT')) {
-                        inPriorities = true;
-                    } else if (inPriorities && line.trim().startsWith('-')) {
-                        priorities.push(line.trim().substring(1).trim());
-                    } else if (inPriorities && line.includes(':')) {
-                        inPriorities = false;
-                    }
-                });
+                // Check if content is JSON object or string
+                if (typeof briefing.content === 'object' && briefing.content.top_priorities) {
+                    // New JSON format
+                    priorities = briefing.content.top_priorities.map(p => ({
+                        title: p.title,
+                        why: p.why,
+                        first_step: p.first_step
+                    }));
+                } else if (typeof briefing.content === 'string') {
+                    // Fallback for old markdown format
+                    const lines = briefing.content.split('\n');
+                    let inPriorities = false;
+                    
+                    lines.forEach(line => {
+                        if (line.includes('Top 3 Priorities') || line.includes('URGENT')) {
+                            inPriorities = true;
+                        } else if (inPriorities && line.trim().startsWith('-')) {
+                            priorities.push({
+                                title: line.trim().substring(1).trim(),
+                                why: '',
+                                first_step: ''
+                            });
+                        } else if (inPriorities && line.includes(':')) {
+                            inPriorities = false;
+                        }
+                    });
+                }
             }
             
-            // Add alerts as priorities
+            // Add alerts as priorities (for backwards compatibility)
             alerts.forEach(alert => {
                 if (alert.content) {
-                    priorities.push(alert.content.split('\n')[0]);
+                    priorities.push({
+                        title: alert.content.split('\n')[0],
+                        why: 'Alert from system',
+                        first_step: 'Review the alert details'
+                    });
                 }
             });
             
             // If no priorities found, show placeholder
             if (priorities.length === 0) {
                 priorities = [
-                    "Review and respond to urgent emails",
-                    "Complete pending tasks from yesterday",
-                    "Prepare for upcoming meetings"
+                    {
+                        title: "Review and respond to urgent emails",
+                        why: "Stay on top of communications",
+                        first_step: "Open email inbox"
+                    },
+                    {
+                        title: "Complete pending tasks from yesterday",
+                        why: "Maintain momentum",
+                        first_step: "Review task list"
+                    },
+                    {
+                        title: "Prepare for upcoming meetings",
+                        why: "Be prepared and engaged",
+                        first_step: "Check calendar"
+                    }
                 ];
             }
             
-            // Render priorities
-            priorityList.innerHTML = priorities.slice(0, 3).map((priority, index) => `
+            // Render priorities with structured data
+            priorityList.innerHTML = priorities.slice(0, 3).map((priority, index) => {
+                const title = typeof priority === 'string' ? priority : priority.title;
+                const why = priority.why || '';
+                const firstStep = priority.first_step || '';
+                
+                return `
                 <li class="priority-item">
                     <input type="checkbox" class="priority-checkbox" id="priority-${index}" onchange="togglePriority(${index})">
                     <div class="priority-content">
-                        <div class="priority-title">Priority ${index + 1}</div>
-                        <div class="priority-details">${priority}</div>
+                        <div class="priority-title">${title}</div>
+                        <div class="priority-details">
+                            ${why ? `<div><strong>Why:</strong> ${why}</div>` : ''}
+                            ${firstStep ? `<div><strong>First Step:</strong> ${firstStep}</div>` : ''}
+                        </div>
                         <div class="priority-actions">
                             <button class="action-btn primary" onclick="startTask(${index})">Start Task</button>
                             <button class="action-btn" onclick="viewDetails(${index})">View Details</button>
@@ -745,7 +783,7 @@
                         </div>
                     </div>
                 </li>
-            `).join('');
+            `}).join('');
         }
         
         // Load radar panel
@@ -767,23 +805,33 @@
             let radarData = [];
             
             if (briefing && briefing.content) {
-                // Parse "On Your Radar" section
-                const lines = briefing.content.split('\n');
-                let inRadar = false;
-                
-                lines.forEach(line => {
-                    if (line.includes('On Your Radar') || line.includes('IMPORTANT')) {
-                        inRadar = true;
-                    } else if (inRadar && line.trim().startsWith('-')) {
-                        radarData.push({
-                            theme: 'Important',
-                            title: line.trim().substring(1).trim(),
-                            summary: 'Requires attention soon'
-                        });
-                    } else if (inRadar && line.includes(':')) {
-                        inRadar = false;
-                    }
-                });
+                // Check if content is JSON object or string
+                if (typeof briefing.content === 'object' && briefing.content.on_your_radar) {
+                    // New JSON format
+                    radarData = briefing.content.on_your_radar.map(item => ({
+                        theme: 'Important',
+                        title: item.title,
+                        summary: item.context || 'Requires attention soon'
+                    }));
+                } else if (typeof briefing.content === 'string') {
+                    // Fallback for old markdown format
+                    const lines = briefing.content.split('\n');
+                    let inRadar = false;
+                    
+                    lines.forEach(line => {
+                        if (line.includes('On Your Radar') || line.includes('IMPORTANT')) {
+                            inRadar = true;
+                        } else if (inRadar && line.trim().startsWith('-')) {
+                            radarData.push({
+                                theme: 'Important',
+                                title: line.trim().substring(1).trim(),
+                                summary: 'Requires attention soon'
+                            });
+                        } else if (inRadar && line.includes(':')) {
+                            inRadar = false;
+                        }
+                    });
+                }
             }
             
             // Add status updates to radar
@@ -831,25 +879,35 @@
             let socialData = [];
             
             if (briefing && briefing.content) {
-                // Parse "Connections" section
-                const lines = briefing.content.split('\n');
-                let inSocial = false;
-                
-                lines.forEach(line => {
-                    if (line.includes('Connections') || line.includes('SOCIAL')) {
-                        inSocial = true;
-                    } else if (inSocial && (line.includes('waiting') || line.includes('respond') || line.includes('follow'))) {
-                        // Extract person name if mentioned
-                        const match = line.match(/(\w+\s\w+)|(\w+@[\w.]+)/);
-                        const person = match ? match[0] : 'Contact';
-                        
-                        socialData.push({
-                            name: person,
-                            context: line.trim(),
-                            action: 'Reply'
-                        });
-                    }
-                });
+                // Check if content is JSON object or string
+                if (typeof briefing.content === 'object' && briefing.content.connections) {
+                    // New JSON format
+                    socialData = briefing.content.connections.map(conn => ({
+                        name: conn.person,
+                        context: conn.suggestion,
+                        action: 'Take Action'
+                    }));
+                } else if (typeof briefing.content === 'string') {
+                    // Fallback for old markdown format
+                    const lines = briefing.content.split('\n');
+                    let inSocial = false;
+                    
+                    lines.forEach(line => {
+                        if (line.includes('Connections') || line.includes('SOCIAL')) {
+                            inSocial = true;
+                        } else if (inSocial && (line.includes('waiting') || line.includes('respond') || line.includes('follow'))) {
+                            // Extract person name if mentioned
+                            const match = line.match(/(\w+\s\w+)|(\w+@[\w.]+)/);
+                            const person = match ? match[0] : 'Contact';
+                            
+                            socialData.push({
+                                name: person,
+                                context: line.trim(),
+                                action: 'Reply'
+                            });
+                        }
+                    });
+                }
             }
             
             // If no social items, show placeholders

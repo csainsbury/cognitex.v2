@@ -105,35 +105,52 @@ class EmailAgent(BaseAgent):
         """
         logger.info(f"Summarizing urgent emails for user {user_id}")
         
-        # Create prompt for LLM
-        prompt = """
-        IMPORTANT: You will receive 100-150 emails. Scan ALL of them before summarizing.
-        
-        Your task is to identify what TRULY matters from this full email context:
-        
-        1. MEETINGS & SCHEDULING - Any consortium meetings, team sessions, or calendar items
-        2. BUSINESS OPPORTUNITIES - Introductions, partnerships, networking (e.g. "family offices", "healthcare")  
-        3. PEOPLE REQUIRING RESPONSES - Emails from actual individuals awaiting replies
-        4. PROJECT UPDATES - Work-related items needing decisions or awareness
-        5. DEADLINES - Time-sensitive items with specific dates
-        
-        For EACH category above, explicitly state what you found or "None found".
-        
-        CRITICAL: Look for emails with subjects containing:
-        - Meeting invitations (consortium, team meetings)
-        - Professional introductions (healthcare, business contacts)
-        - Colleague names (Josh, Nelson, etc.)
-        - Project names (GEN-IMPACT, RETFound, etc.)
-        
-        These are MORE important than:
-        - Promotional emails
-        - Newsletters
-        - Social media notifications
-        - General marketing
-        
-        Provide a structured summary with specific actions needed for each important email.
-        Include sender name, subject, and required action.
-        """
+        # Create prompt for LLM with explicit tool usage instructions
+        prompt = """You are an email analysis assistant with access to Gmail tools. You must use these tools to complete your task.
+
+AVAILABLE TOOLS:
+1. get_recent_important_emails - Fetches recent important emails
+2. search_emails - Searches for specific emails by query
+3. get_email_details - Gets full details of a specific email
+4. get_unread_from_contacts - Gets unread emails from important contacts
+
+TASK WORKFLOW:
+Step 1: Use get_recent_important_emails to fetch the last 100-150 emails
+Step 2: If you find references to specific topics needing more detail, use search_emails
+Step 3: For critical emails, use get_email_details to get full content
+
+ANALYSIS REQUIREMENTS:
+After gathering emails, identify what TRULY matters:
+
+1. MEETINGS & SCHEDULING - Consortium meetings, team sessions, calendar items
+2. BUSINESS OPPORTUNITIES - Introductions, partnerships, networking opportunities
+3. PEOPLE REQUIRING RESPONSES - Emails from individuals awaiting replies
+4. PROJECT UPDATES - Work items needing decisions or awareness
+5. DEADLINES - Time-sensitive items with specific dates
+
+PRIORITIZATION:
+HIGH PRIORITY (urgency 4-5):
+- Meeting invitations with specific times
+- Emails from known colleagues (Josh, Nelson, etc.)
+- Project mentions (GEN-IMPACT, RETFound, etc.)
+- Emails explicitly requesting action
+
+LOW PRIORITY (urgency 1-2):
+- Marketing emails and newsletters
+- Social media notifications
+- Promotional content
+- Automated notifications
+
+OUTPUT FORMAT:
+For each category, provide:
+- Sender name
+- Email subject
+- Required action
+- Urgency level (1-5)
+
+State "None found" for empty categories.
+
+Remember: You MUST use the tools to gather email data before providing analysis."""
         
         # Execute LLM with tools
         result = await llm_service.execute_with_tools(

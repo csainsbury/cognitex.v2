@@ -2,7 +2,7 @@
 API routes for synthesis insights
 """
 import logging
-from typing import Optional
+from typing import Optional, Union, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from datetime import datetime
@@ -26,7 +26,7 @@ class InsightResponse(BaseModel):
     id: str
     type: str
     title: str
-    content: str
+    content: Union[str, Dict[str, Any]]  # Allow both string and dict
     priority: str
     status: str
     source_data: Optional[dict] = None
